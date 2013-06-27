@@ -1,7 +1,9 @@
 import Data.Maybe
 import Data.Version
+import Data.List
 
 import Control.Monad
+import System.Directory
 
 import Text.ParserCombinators.ReadP
 
@@ -21,12 +23,28 @@ main = defaultMainWithHooks hooks
 localConfHook a b = do
     lbi <- (confHook simpleUserHooks) a b
 
-    when (isJust $ libraryConfig lbi) $ do
-        let clbi = fromJust $ libraryConfig lbi
-        deps <- foldM resolveDependencies [] $ componentPackageDeps clbi
-        --mapM_ (printDependency 0 lbi) $ map fst $ componentPackageDeps clbi
+    -- The entirety of dependencies this package has.
+    let externalDeps = map fst $ externalPackageDeps lbi
+
+    -- Recursively walk the dependencies and build up a list of them all.
+    deps <- foldM (resolveDependencies lbi) [] externalDeps
+
+    -- Turn [InstalledPackageId] into [PackageId]
+    let packageIds = map sourcePackageId $ catMaybes $ map (lookupInstalledPackageId (installedPkgs lbi)) (nub deps)
+    let deps = sort packageIds
+    createDirectoryIfMissing True ".cabal"
+    writeFile ".cabal/lock" $ Data.List.intercalate "\n" $ map show deps
+
+    forM deps $ \spid -> do
+        let (PackageName name) = pkgName spid
+        let version = showVersion $ pkgVersion spid
+        let a = read (show $ pkgVersion spid) :: Version
+        if any (name==) baseLibraries
+            then return ()
+            else putStrLn $ show spid
 
     return lbi
+
 
 -- Packages which are excluded from the lock file.
 baseLibraries =
@@ -39,24 +57,18 @@ baseLibraries =
     , "rts"
     ]
 
-resolveDependencies :: [(InstalledPackageId, PackageId)] -> 
-printDependency :: Int -> LocalBuildInfo -> InstalledPackageId -> IO ()
-printDependency indent lbi ipid@(InstalledPackageId ipids) = do
-    let mbipi = lookupInstalledPackageId (installedPkgs lbi) ipid
-
-    when (isJust mbipi) $ do
-        let ipi = fromJust mbipi
-        let spid = sourcePackageId ipi
-        let (PackageName name) = pkgName spid
-        let version = showVersion $ pkgVersion spid
-        if any (name==) baseLibraries
-            then return ()
-            else do
-                let ver = (replicate indent ' ') ++ name ++ " " ++ version
-                putStrLn ver
-                -- putStrLn $ show $ fst $ last $ (readP_to_S parseVersion) version
-                -- warn normal "warning hre"
-                let deps = depends ipi
-                mapM_ (printDependency (indent + 2) lbi) deps
-
-    return ()
+resolveDependencies :: LocalBuildInfo -> [InstalledPackageId] -> InstalledPackageId -> IO [InstalledPackageId]
+resolveDependencies lbi a b = do
+    let mbipi = lookupInstalledPackageId (installedPkgs lbi) b
+    if isJust mbipi
+        then do
+            let ipi = fromJust mbipi
+            let spid = sourcePackageId ipi
+            let (PackageName name) = pkgName spid
+            let version = showVersion $ pkgVersion spid
+            if any (name==) baseLibraries
+                then return $ b : a
+                else do
+                    let deps = depends ipi
+                    foldM (resolveDependencies lbi) (b : a) deps
+        else return $ b : a
