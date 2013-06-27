@@ -20,9 +20,17 @@ main = defaultMainWithHooks hooks
         { confHook = localConfHook
         }
 
+
 localConfHook a b = do
     lbi <- (confHook simpleUserHooks) a b
+    haveLock <- doesFileExist ".cabal/lock"
+    if haveLock
+        then loadDependencies lbi
+        else saveDependencies lbi
 
+
+saveDependencies :: LocalBuildInfo -> IO LocalBuildInfo
+saveDependencies lbi = do
     -- The entirety of dependencies this package has.
     let externalDeps = map fst $ externalPackageDeps lbi
 
@@ -43,6 +51,14 @@ localConfHook a b = do
             then return ()
             else putStrLn $ show spid
 
+    return lbi
+
+
+loadDependencies :: LocalBuildInfo -> IO LocalBuildInfo
+loadDependencies lbi = do
+    fileContents <- readFile ".cabal/lock"
+    let deps = map (read :: String -> PackageIdentifier) $ lines fileContents
+    putStrLn $ show deps
     return lbi
 
 
